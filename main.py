@@ -1,10 +1,10 @@
 import csv
 import json
 import logging
-import uuid
+from typing import Dict, Any, List, Union
 
 import requests
-from openai import OpenAI
+import argparse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,112 +15,90 @@ logging.basicConfig(
     ]
 )
 
-client = OpenAI(
-    api_key="",
-)
 
-
-def format_result(id, verbatim_locality, gpt_result, mindat_result_dict):
-    gpt_result["id"] = id
-    gpt_result["original_locality"] = verbatim_locality
+def format_result(id: Union[str, int], verbatim_locality: str, mindat_result_dict: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Formats the result of the mindat api call
+    :param id:
+    :param verbatim_locality:
+    :param mindat_result_dict:
+    :return:
+    """
+    result = dict()
+    result["id"] = id
+    result["original_locality"] = verbatim_locality
     if mindat_result_dict and len(mindat_result_dict.get("results")) > 0:
-        gpt_result["mindat_id"] = mindat_result_dict.get("results")[0].get("id")
-        gpt_result["mindat_text"] = mindat_result_dict.get("results")[0].get("txt")
-        gpt_result["mindat_latitude"] = mindat_result_dict.get("results")[0].get("latitude")
-        gpt_result["mindat_longitude"] = mindat_result_dict.get("results")[0].get("longitude")
-    return gpt_result
+        result["mindat_id"] = mindat_result_dict.get("results")[0].get("id")
+        result["mindat_text"] = mindat_result_dict.get("results")[0].get("txt")
+        result["mindat_latitude"] = mindat_result_dict.get("results")[0].get("latitude")
+        result["mindat_longitude"] = mindat_result_dict.get("results")[0].get("longitude")
+    logging.info(f'Found Mindat location: {str(result.get("mindat_text"))}')
+    return result
 
 
-def handle_line(row):
-    verbatim_location = retrieve_verbatim_location(row)
-    logging.info(verbatim_location)
+def handle_line(row: List[str], cml_args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Handles a single line in the csv file. Retrieve the location from the CSV and if it is not empty, query the mindat.
+    This method should always return a result so that the amount of lines in the resulting file are equal to the processed file.
+    :param row: A single row from the CSV file
+    :param cml_args: The command line arguments
+    :return: Return a dict with the results
+    """
+    verbatim_location = row[cml_args.location_column]
+    logging.info(f'Found location:{verbatim_location} in the csv file')
     if verbatim_location is None or verbatim_location == "":
         logging.info(f'Could not determine a verbatim locality for {row[1]}')
-        return
     else:
-        success = False
-        while not success:
-            try:
-                gpt_result = retrieve_chat_gpt_response(verbatim_location)
-                gpt_result_dict = json.loads(gpt_result)
-                success = True
-            except Exception as e:
-                logging.error(f'Error while parsing GPT result for {verbatim_location}', e)
-        mindat_result_dict = {}
-        if gpt_result_dict.get('locality') is not None and gpt_result_dict.get(
-                'locality') != "" and gpt_result_dict.get('locality') != "Undefined":
-            mindat_result = requests.get(f'https://api.mindat.org/localities/?txt={gpt_result_dict.get("locality")}&'
-                                         f'country={gpt_result_dict.get("country")}',
-                                         headers={'Authorization': 'Token'})
+        try:
+            mindat_result = requests.get(f'https://api.mindat.org/localities/?txt={verbatim_location}',
+                                         headers={'Authorization': f'Token {cml_args.token}'})
             mindat_result_dict = json.loads(mindat_result.content)
-            logging.info(mindat_result_dict)
-        elif gpt_result_dict.get('municipality') is not None and gpt_result_dict.get('municipality') != "":
-            mindat_result = requests.get(
-                f'https://api.mindat.org/localities/?txt={gpt_result_dict.get("municipality")}&'
-                f'country={gpt_result_dict.get("country")}',
-                headers={'Authorization': 'Token'})
-            mindat_result_dict = json.loads(mindat_result.content)
-            logging.info(mindat_result_dict)
-        return format_result(row[0], verbatim_location, gpt_result_dict, mindat_result_dict)
+            return format_result(row[0], verbatim_location, mindat_result_dict)
+        except Exception as e:
+            logging.error(f'Could not process {verbatim_location} due to {e}')
+            return format_result(row[0], verbatim_location, None)
 
 
-def retrieve_chat_gpt_response(verbatim_location):
-    completion = client.chat.completions.create(
-        model="gpt-4-1106-preview",
-        messages=[{"role": "user",
-                   "content": f"""
-                       Parse "{verbatim_location}" into json, do not include any explanations, 
-                       only provide a  RFC8259 compliant JSON response following this format without deviation.
-                       Do not start the response with 'json'. Do not return a list.
-                       Translate all values into English. 
-                        {{
-                       "country": "The country",
-                        "municipality": "The municipality",
-                        "stateProvince": "The state province",
-                        "locality": "The locality"
-                        }}
-                        If no value can be found always set the field to null."""}],
-        temperature=0.1,
-    )
-    gpt_result = completion.choices[0].message.content
-    logging.info(gpt_result)
-    if 'json' in gpt_result:
-        gpt_result = gpt_result.replace('json', '').replace('`', '').replace('\n', '').strip()
-        logging.info('Cleaned result: ' + gpt_result)
-    return gpt_result
+def process_csv(cml_args: argparse.Namespace) -> None:
+    """
 
-
-def retrieve_verbatim_location(row):
-    verbatim_location = ''
-    for row_index in [38, 41, 42, 43, 44, 45]:
-        if row[row_index] is not None and row[row_index] != "":
-            if verbatim_location != '':
-                verbatim_location = verbatim_location + ", "
-            verbatim_location = verbatim_location + row[row_index]
-    verbatim_location = verbatim_location.strip()
-    if verbatim_location is None or verbatim_location == "":
-        verbatim_location = row[47]
-    if verbatim_location is None or verbatim_location == "":
-        verbatim_location = row[48]
-    return verbatim_location
-
-
-def process_csv(name: str):
-    with open(name, newline='') as csvfile:
-        spamreader = csv.reader(csvfile, delimiter=',', quotechar='"')
-        with open(f"csv_result_{uuid.uuid4()}.csv", 'w') as csvoutfile:
+    :param cml_args:
+    :return:
+    """
+    with open(cml_args.input, newline='') as csvfile:
+        reader = csv.reader(csvfile, delimiter=',', quotechar='"')
+        with open(cml_args.output, 'w') as csvoutfile:
             writer = csv.DictWriter(csvoutfile,
-                                    fieldnames=["id", "original_locality", "country", "municipality", "stateProvince",
-                                                "locality", "mindat_id", "mindat_text", "mindat_latitude",
+                                    fieldnames=["id", "original_locality", "mindat_id", "mindat_text",
+                                                "mindat_latitude",
                                                 "mindat_longitude"],
                                     extrasaction='ignore')
             writer.writeheader()
-            for i, row in enumerate(spamreader):
-                if i == 0:
-                    logging.info(', '.join(row))
-                else:
-                    handle_line(row)
+            for row in reader:
+                writer.writerow(handle_line(row, cml_args))
+
+
+def setup_argument_parser() -> argparse.Namespace:
+    """
+    Setup the argument parser
+    :return: The parsed arguments
+    """
+    parser = argparse.ArgumentParser(description='Arguments for ')
+    parser.add_argument("--input", "-i", type=str, help="The csv file to process", required=True)
+    parser.add_argument("--location_column", "-l", type=int,
+                        help="The column in which the verbatim location can be found", required=True)
+    parser.add_argument('--token', "-t", type=str, help="The token to access the mindat api", required=True)
+    parser.add_argument("--output", "-o", type=str, help="The csv file in which the result will be stored",
+                        default="result.csv", required=False)
+    parser.add_argument("--country_column", "-c", type=int, help="The column in which the country can be found",
+                        required=False)
+    parser.add_argument("--id_column", "-id", type=int, help="The column in which the id can be found", required=False)
+    return parser.parse_args()
 
 
 if __name__ == '__main__':
-    process_csv("CRS.csv")
+    """
+    The main function. First sets up cml arguments and the starts processing the csv file
+    """
+    args = setup_argument_parser()
+    process_csv(args)
