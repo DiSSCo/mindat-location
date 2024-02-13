@@ -47,7 +47,7 @@ def handle_line(row: List[str], cml_args: argparse.Namespace) -> Dict[str, Any]:
     """
     verbatim_location = row[cml_args.location_column]
     if verbatim_location is None or verbatim_location == "":
-        return format_result(row[0], "Unable to retrive verbatim location", None)
+        return format_result(row[0], "Unable to retrieve verbatim location", None)
     else:
         logging.info(f'Found location: {verbatim_location} in the csv file')
         if verbatim_location is None or verbatim_location == "":
