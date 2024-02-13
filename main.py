@@ -16,7 +16,8 @@ logging.basicConfig(
 )
 
 
-def format_result(id: Union[str, int], verbatim_locality: str, mindat_result_dict: Dict[str, Any]) -> Dict[str, Any]:
+def format_result(id: Union[str, int], verbatim_locality: str, mindat_result_dict: Union[Dict[str, Any], None]) -> Dict[
+    str, Any]:
     """
     Formats the result of the mindat api call
     :param id:
@@ -45,18 +46,21 @@ def handle_line(row: List[str], cml_args: argparse.Namespace) -> Dict[str, Any]:
     :return: Return a dict with the results
     """
     verbatim_location = row[cml_args.location_column]
-    logging.info(f'Found location:{verbatim_location} in the csv file')
     if verbatim_location is None or verbatim_location == "":
-        logging.info(f'Could not determine a verbatim locality for {row[1]}')
+        return format_result(row[0], "Unable to retrive verbatim location", None)
     else:
-        try:
-            mindat_result = requests.get(f'https://api.mindat.org/localities/?txt={verbatim_location}',
-                                         headers={'Authorization': f'Token {cml_args.token}'})
-            mindat_result_dict = json.loads(mindat_result.content)
-            return format_result(row[0], verbatim_location, mindat_result_dict)
-        except Exception as e:
-            logging.error(f'Could not process {verbatim_location} due to {e}')
-            return format_result(row[0], verbatim_location, None)
+        logging.info(f'Found location: {verbatim_location} in the csv file')
+        if verbatim_location is None or verbatim_location == "":
+            logging.info(f'Could not determine a verbatim locality for {row[1]}')
+        else:
+            try:
+                mindat_result = requests.get(f'https://api.mindat.org/localities/?txt={verbatim_location}',
+                                             headers={'Authorization': f'Token {cml_args.token}'})
+                mindat_result_dict = json.loads(mindat_result.content)
+                return format_result(row[0], verbatim_location, mindat_result_dict)
+            except Exception as e:
+                logging.error(f'Could not process {verbatim_location} due to {e}')
+                return format_result(row[0], verbatim_location, None)
 
 
 def process_csv(cml_args: argparse.Namespace) -> None:
